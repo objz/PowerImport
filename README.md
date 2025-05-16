@@ -27,7 +27,7 @@ Anyone who just wants to grab data from Power BI into Excel—fast.
 
 ## How to use
 
-1. Install the MSI add-in (see “Releases”).
+1. Install the MSI add-in see https://github.com/objz/PowerImport/releases/tag/1.0.0 
 2. Open Excel, look for the “PowerImport” tab.
 3. Click "Import Queries", pick your table, and import. That’s it.
 
