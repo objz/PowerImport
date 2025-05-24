@@ -103,21 +103,33 @@ namespace PowerImport
             int dataRows = excelTable.DataBodyRange?.Rows.Count ?? 0;
             if (dataRows > 0)
                 excelTable.DataBodyRange.Delete();
+
             var cmd = Connection.CreateCommand();
             cmd.CommandText = $"EVALUATE {EscapeDaxIdentifier(pbiTable)}";
             var rows = new List<object[]>();
             int colCount = 0;
             string[] headers = null;
+            Type[] columnTypes = null;
+
             using (var reader = cmd.ExecuteReader())
             {
                 colCount = reader.FieldCount;
                 headers = new string[colCount];
+                columnTypes = new Type[colCount];
                 for (int i = 0; i < colCount; i++)
+                {
                     headers[i] = RemovePrefix(reader.GetName(i), pbiTable);
+                    columnTypes[i] = reader.GetFieldType(i);
+                }
+                System.Diagnostics.Debug.WriteLine("Column types:");
+                for (int i = 0; i < colCount; i++)
+                    System.Diagnostics.Debug.WriteLine($"[{i}] {headers[i]}: {columnTypes[i].Name}");
+
                 while (reader.Read())
                 {
                     var values = new object[colCount];
                     reader.GetValues(values);
+
                     rows.Add(values);
                 }
             }
@@ -127,10 +139,20 @@ namespace PowerImport
                 var insertStart = anchorCell.Offset[1, 0];
                 var insertRange = insertStart.Resize[rows.Count, colCount];
                 insertRange.Value2 = dataArr;
+
+                for (int i = 0; i < colCount; i++)
+                {
+                    if (columnTypes[i] == typeof(DateTime))
+                    {
+                        Range dateCol = insertStart.Offset[0, i].Resize[rows.Count, 1];
+                        dateCol.NumberFormat = "m/d/yyyy";
+                    }
+                }
             }
             excelTable.Range.Columns.AutoFit();
             return true;
         }
+
 
         public List<string> GetAvailableTableNames()
         {
@@ -162,8 +184,16 @@ namespace PowerImport
                 {
                     int colCount = reader.FieldCount;
                     var headers = new object[colCount];
+                    var columnTypes = new Type[colCount];
                     for (int i = 0; i < colCount; i++)
+                    {
                         headers[i] = RemovePrefix(reader.GetName(i), pbiTable);
+                        columnTypes[i] = reader.GetFieldType(i);
+                    }
+                    System.Diagnostics.Debug.WriteLine("Column types:");
+                    for (int i = 0; i < colCount; i++)
+                        System.Diagnostics.Debug.WriteLine($"[{i}] {headers[i]}: {columnTypes[i].Name}");
+
                     var rows = new List<object[]>();
                     while (reader.Read())
                     {
@@ -176,7 +206,19 @@ namespace PowerImport
                     anchor = worksheet.Range[targetCell];
                     anchor.Resize[1, colCount].Value2 = headers;
                     if (rows.Count > 0)
+                    {
                         anchor.Offset[1, 0].Resize[rows.Count, colCount].Value2 = To2DArray(rows);
+
+                        for (int i = 0; i < colCount; i++)
+                        {
+                            if (columnTypes[i] == typeof(DateTime))
+                            {
+                                Range dateCol = anchor.Offset[1, i].Resize[rows.Count, 1];
+                                dateCol.NumberFormat = "m/d/yyyy";
+                            }
+                        }
+                    }
+
                     var dataRange = worksheet.Range[anchor, anchor.Offset[rows.Count, colCount - 1]];
                     var table = worksheet.ListObjects.Add(XlListObjectSourceType.xlSrcRange, dataRange, Type.Missing, XlYesNoGuess.xlYes);
                     table.Name = $"tbl_{pbiTable}";
@@ -192,6 +234,7 @@ namespace PowerImport
                     worksheet.Delete();
             }
         }
+
 
         private void WriteOrUpdateMetadata(string wsName, string excelTable, string pbiTable, string anchorCell)
         {
