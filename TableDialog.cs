@@ -1,4 +1,6 @@
-﻿using System;
+using System;
+using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using Microsoft.Office.Interop.Excel;
 using Button = System.Windows.Forms.Button;
@@ -21,23 +23,33 @@ namespace PowerImport
         public TableDialog(string tableName)
         {
             InitializeComponent();
+
+            float scale;
+            using (var g = Graphics.FromHwnd(IntPtr.Zero))
+                scale = g.DpiX / 96f;
+
             Text = $"Import {tableName}";
             FormBorderStyle = FormBorderStyle.FixedDialog;
-            StartPosition = FormStartPosition.CenterScreen;
+            StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            TopMost = true;
-            Width = 265;
-            Height = 140;
+            AutoSize = true;
+            AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            Padding = new Padding((int)(5 * scale));
+
+            int titleTextWidth = TextRenderer.MeasureText(Text, SystemFonts.CaptionFont).Width;
+            int titleBarExtra = (int)(80 * scale);
+            int minWidth = Math.Max(titleTextWidth + titleBarExtra, (int)(280 * scale));
+            MinimumSize = new Size(minWidth, 0);
 
             var layout = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 RowCount = 3,
                 ColumnCount = 3,
-                Padding = new Padding(10, 10, 10, 10),
-                AutoSize = true
+                Padding = new Padding((int)(10 * scale)),
             };
 
             radioNewSheet = new RadioButton
@@ -45,7 +57,7 @@ namespace PowerImport
                 Text = "New worksheet",
                 Checked = true,
                 AutoSize = true,
-                Margin = new Padding(0, 0, 0, 4)
+                Margin = new Padding(0, 0, 0, (int)(4 * scale))
             };
             layout.Controls.Add(radioNewSheet, 0, 0);
             layout.SetColumnSpan(radioNewSheet, 3);
@@ -54,21 +66,21 @@ namespace PowerImport
             {
                 Text = "Existing at:",
                 AutoSize = true,
-                Margin = new Padding(0, 0, 0, 0)
+                Margin = new Padding(0)
             };
             textCell = new TextBox
             {
-                Text = "$A$1",
+                Text = "A1",
                 Enabled = false,
-                Width = 95,
-                Margin = new Padding(2, 0, 2, 0)
+                Width = (int)(100 * scale),
+                Margin = new Padding((int)(4 * scale), 0, (int)(4 * scale), 0)
             };
             btnPickCell = new Button
             {
                 Text = "...",
                 Enabled = false,
-                Width = 24,
-                Height = 21,
+                Width = (int)(28 * scale),
+                Height = (int)(24 * scale),
                 Margin = new Padding(0)
             };
 
@@ -80,13 +92,13 @@ namespace PowerImport
             {
                 Text = "OK",
                 DialogResult = DialogResult.OK,
-                Width = 75
+                Width = (int)(75 * scale)
             };
             btnCancel = new Button
             {
                 Text = "Cancel",
                 DialogResult = DialogResult.Cancel,
-                Width = 75
+                Width = (int)(75 * scale)
             };
 
             var buttonPanel = new FlowLayoutPanel
@@ -94,7 +106,7 @@ namespace PowerImport
                 FlowDirection = FlowDirection.LeftToRight,
                 AutoSize = true,
                 Anchor = AnchorStyles.Right,
-                Margin = new Padding(0, 10, 0, 0)
+                Margin = new Padding(0, (int)(10 * scale), 0, 0)
             };
             buttonPanel.Controls.Add(btnOK);
             buttonPanel.Controls.Add(btnCancel);
@@ -105,7 +117,7 @@ namespace PowerImport
             CancelButton = btnCancel;
             Controls.Add(layout);
 
-            void UpdateCellState(object s, EventArgs e)
+            void UpdateCellState(object s, EventArgs ev)
             {
                 bool enabled = radioExistingSheet.Checked;
                 textCell.Enabled = enabled;
@@ -113,18 +125,87 @@ namespace PowerImport
             }
             radioNewSheet.CheckedChanged += UpdateCellState;
             radioExistingSheet.CheckedChanged += UpdateCellState;
-            btnPickCell.Click += (s, e) =>
+
+            btnPickCell.Click += PickCell_Click;
+            UpdateCellState(null, null);
+        }
+
+        private void PickCell_Click(object sender, EventArgs e)
+        {
+            Range range = null;
+            try
             {
+                var xlApp = Globals.ThisAddIn.Application;
+                var result = xlApp.InputBox("Select target cell", "Target Cell",
+                    textCell.Text, Type: 8);
+
+                if (result is bool) return;
+
+                range = result as Range;
+                if (range != null)
+                    textCell.Text = range.get_Address(false, false);
+            }
+            catch (COMException)
+            {
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Could not select cell:\n" + ex.Message,
+                    "Cell Picker", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                if (range != null)
+                {
+                    try { Marshal.ReleaseComObject(range); }
+                    catch { }
+                }
+            }
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            base.OnFormClosing(e);
+
+            if (DialogResult == DialogResult.OK && radioExistingSheet.Checked)
+            {
+                string addr = textCell.Text?.Trim();
+                if (string.IsNullOrEmpty(addr))
+                {
+                    MessageBox.Show("Please enter a valid cell address.",
+                        "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    e.Cancel = true;
+                    return;
+                }
+
                 try
                 {
-                    var xlApp = Globals.ThisAddIn.Application;
-                    var range = xlApp.InputBox("Select target cell", "Target Cell", textCell.Text, Type: 8) as Range;
-                    if (range != null)
-                        textCell.Text = range.get_Address(false, false);
+                    var ws = Globals.ThisAddIn.Application.ActiveSheet as Worksheet;
+                    if (ws != null)
+                    {
+                        Range test = null;
+                        try
+                        {
+                            test = ws.Range[addr];
+                        }
+                        catch
+                        {
+                            MessageBox.Show($"'{addr}' is not a valid cell address.",
+                                "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            e.Cancel = true;
+                        }
+                        finally
+                        {
+                            if (test != null)
+                            {
+                                try { Marshal.ReleaseComObject(test); }
+                                catch { }
+                            }
+                        }
+                    }
                 }
                 catch { }
-            };
-            UpdateCellState(null, null);
+            }
         }
     }
 }
