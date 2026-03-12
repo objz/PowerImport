@@ -1,4 +1,4 @@
-﻿namespace PowerImport
+namespace PowerImport
 {
     partial class TablePane
     {
@@ -13,9 +13,16 @@
         /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
         protected override void Dispose(bool disposing)
         {
-            if (disposing && (components != null))
+            if (disposing)
             {
-                components.Dispose();
+                if (_cts != null)
+                {
+                    _cts.Cancel();
+                    _cts.Dispose();
+                    _cts = null;
+                }
+
+                components?.Dispose();
             }
             base.Dispose(disposing);
         }

@@ -1,20 +1,40 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.AnalysisServices.AdomdClient;
 
 namespace PowerImport
 {
     public partial class TablePane : UserControl
     {
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
+        private const int EM_SETCUEBANNER = 0x1501;
+
         private ComboBox instanceSelector;
         private FlowLayoutPanel tablePanel;
         private Label statusLabel;
-        private List<(int port, string catalog)> runningInstances = new List<(int, string)>();
+        private TextBox searchBox;
         private Button refreshButton;
+        private List<(int port, string catalog)> runningInstances = new List<(int, string)>();
+        private List<string> allTableNames = new List<string>();
+
+        private CancellationTokenSource _cts = new CancellationTokenSource();
+
+        private bool _loading;
+
+        private static readonly float _dpiScale;
+        static TablePane()
+        {
+            using (var g = Graphics.FromHwnd(IntPtr.Zero))
+                _dpiScale = g.DpiX / 96f;
+        }
+        private static int Dpi(int value) => (int)(value * _dpiScale);
 
         public TablePane()
         {
@@ -25,8 +45,8 @@ namespace PowerImport
             instanceSelector = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                Width = 320,
-                Margin = new Padding(10),
+                Width = Dpi(320),
+                Margin = new Padding(Dpi(10)),
                 Enabled = false
             };
             instanceSelector.SelectedIndexChanged += (s, e) => SwitchInstanceAsync();
@@ -35,15 +55,25 @@ namespace PowerImport
             {
                 AutoSize = true,
                 ForeColor = Color.DarkGray,
-                Margin = new Padding(10, 0, 10, 0),
+                Margin = new Padding(Dpi(10), 0, Dpi(10), 0),
                 Text = "Loading..."
             };
+
+            searchBox = new TextBox
+            {
+                Width = Dpi(320),
+                Margin = new Padding(Dpi(10), 0, Dpi(10), Dpi(4)),
+                Visible = false
+            };
+            searchBox.HandleCreated += (s, e) =>
+                SendMessage(searchBox.Handle, EM_SETCUEBANNER, (IntPtr)1, "Search tables...");
+            searchBox.TextChanged += (s, e) => FilterTables(searchBox.Text);
 
             tablePanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 AutoScroll = true,
-                Padding = new Padding(10),
+                Padding = new Padding(Dpi(10)),
                 FlowDirection = FlowDirection.TopDown,
                 WrapContents = false
             };
@@ -51,76 +81,33 @@ namespace PowerImport
             var layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                RowCount = 3,
+                RowCount = 4,
                 ColumnCount = 1,
                 AutoSize = true
             };
             layout.Controls.Add(instanceSelector, 0, 0);
             layout.Controls.Add(statusLabel, 0, 1);
-            layout.Controls.Add(tablePanel, 0, 2);
+            layout.Controls.Add(searchBox, 0, 2);
+            layout.Controls.Add(tablePanel, 0, 3);
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
             Controls.Add(layout);
+        }
 
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
             ReloadInstancesAsync();
         }
 
-        private async void ReloadInstancesAsync()
+        private void ClearTablePanel()
         {
-            statusLabel.Text = "Loading Power BI Desktop instances...";
+            foreach (Control c in tablePanel.Controls)
+                c.Dispose();
             tablePanel.Controls.Clear();
-            instanceSelector.Enabled = false;
-            instanceSelector.Items.Clear();
-            runningInstances.Clear();
-
-            var portFiles = await Task.Run(() => FindPowerBIPortFiles());
-
-            if (IsHandleCreated)
-                Invoke((Action)(() =>
-                {
-                    if (portFiles.Count == 0)
-                    {
-                        statusLabel.Text = "No running Power BI Desktop instances found.";
-                        tablePanel.Controls.Clear();
-                        instanceSelector.Enabled = false;
-
-                        if (refreshButton == null)
-                        {
-                            refreshButton = new Button
-                            {
-                                Text = "Refresh",
-                                Width = 120,
-                                Height = 36,
-                                Margin = new Padding(10)
-                            };
-                            refreshButton.Click += (s, e) =>
-                            {
-                                statusLabel.Text = "Retrying...";
-                                ReloadInstancesAsync();
-                            };
-                        }
-                        if (!Controls.Contains(refreshButton))
-                            Controls.Add(refreshButton);
-                    }
-                    else
-                    {
-                        if (refreshButton != null && Controls.Contains(refreshButton))
-                            Controls.Remove(refreshButton);
-
-                        foreach (var (port, catalog) in portFiles)
-                        {
-                            string label = GetPrettyCatalogName(catalog);
-                            instanceSelector.Items.Add(label);
-                            runningInstances.Add((port, catalog));
-                        }
-
-                        instanceSelector.SelectedIndex = 0;
-                        instanceSelector.Enabled = true;
-                        statusLabel.Text = "";
-                    }
-                }));
         }
 
         private string GetPrettyCatalogName(string catalog)
@@ -128,68 +115,205 @@ namespace PowerImport
             return catalog;
         }
 
+        private void BuildTableButtons(IEnumerable<string> tableNames)
+        {
+            ClearTablePanel();
+            foreach (var tableName in tableNames)
+            {
+                var btn = new Button
+                {
+                    Text = tableName,
+                    Width = Dpi(300),
+                    Height = Dpi(40),
+                    TextAlign = ContentAlignment.MiddleLeft,
+                    FlatStyle = FlatStyle.Standard,
+                    Tag = tableName
+                };
+                btn.Click += TableButton_Click;
+                tablePanel.Controls.Add(btn);
+            }
+        }
+
+        private void FilterTables(string filter)
+        {
+            if (allTableNames.Count == 0) return;
+
+            var filtered = string.IsNullOrWhiteSpace(filter)
+                ? allTableNames
+                : allTableNames.Where(t => t.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+
+            BuildTableButtons(filtered);
+        }
+
+        private async void ReloadInstancesAsync()
+        {
+            if (_loading) return;
+            _loading = true;
+
+            try
+            {
+                statusLabel.Text = "Loading Power BI Desktop instances...";
+                ClearTablePanel();
+                allTableNames.Clear();
+                searchBox.Text = "";
+                searchBox.Visible = false;
+                instanceSelector.Enabled = false;
+                instanceSelector.Items.Clear();
+                runningInstances.Clear();
+
+                var token = _cts.Token;
+                var portFiles = await Task.Run(() => ThisAddIn.FindPowerBIPortFiles(), token);
+                token.ThrowIfCancellationRequested();
+
+                if (portFiles.Count == 0)
+                {
+                    statusLabel.Text = "No running Power BI Desktop instances found.";
+                    ClearTablePanel();
+                    instanceSelector.Enabled = false;
+
+                    if (refreshButton == null)
+                    {
+                        refreshButton = new Button
+                        {
+                            Text = "Refresh",
+                            Width = Dpi(120),
+                            Height = Dpi(36),
+                            Margin = new Padding(Dpi(10))
+                        };
+                        refreshButton.Click += RefreshButton_Click;
+                    }
+                    if (!tablePanel.Controls.Contains(refreshButton))
+                        tablePanel.Controls.Add(refreshButton);
+                }
+                else
+                {
+                    if (refreshButton != null && tablePanel.Controls.Contains(refreshButton))
+                        tablePanel.Controls.Remove(refreshButton);
+
+                    foreach (var (port, catalog) in portFiles)
+                    {
+                        string label = GetPrettyCatalogName(catalog);
+                        instanceSelector.Items.Add(label);
+                        runningInstances.Add((port, catalog));
+                    }
+
+                    instanceSelector.SelectedIndex = 0;
+                    instanceSelector.Enabled = true;
+                    statusLabel.Text = "";
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                if (!_cts.IsCancellationRequested)
+                    statusLabel.Text = "Error loading instances: " + ex.Message;
+            }
+            finally
+            {
+                _loading = false;
+            }
+        }
+
+        private void RefreshButton_Click(object sender, EventArgs e)
+        {
+            statusLabel.Text = "Retrying...";
+            ReloadInstancesAsync();
+        }
+
         private async void SwitchInstanceAsync()
         {
+            if (_loading) return;
+
             int idx = instanceSelector.SelectedIndex;
             if (idx < 0 || idx >= runningInstances.Count)
             {
                 statusLabel.Text = "No instance selected.";
-                tablePanel.Controls.Clear();
+                ClearTablePanel();
+                allTableNames.Clear();
+                searchBox.Text = "";
+                searchBox.Visible = false;
                 return;
             }
 
-            var selected = runningInstances[idx];
-            string newConn = $"Provider=MSOLAP;Data Source=localhost:{selected.port};Initial Catalog={selected.catalog};Integrated Security=SSPI;Impersonation Level=Impersonate;Persist Security Info=True;";
+            _loading = true;
 
-            if (Globals.ThisAddIn.HasActiveConnection())
-                Globals.ThisAddIn.Connection?.Close();
+            var selected = runningInstances[idx];
+            string newConn =
+                $"Provider=MSOLAP;Data Source=localhost:{selected.port};" +
+                $"Initial Catalog={selected.catalog};Integrated Security=SSPI;" +
+                "Impersonation Level=Impersonate;";
 
             instanceSelector.Enabled = false;
             statusLabel.Text = "Connecting...";
-            tablePanel.Controls.Clear();
+            ClearTablePanel();
+            allTableNames.Clear();
+            searchBox.Text = "";
+            searchBox.Visible = false;
 
             try
             {
-                await Task.Run(() =>
-                {
-                    Globals.ThisAddIn.ConnectionString = newConn;
-                    Globals.ThisAddIn.Connection = new Microsoft.AnalysisServices.AdomdClient.AdomdConnection(newConn);
-                    Globals.ThisAddIn.Connection.Open();
-                });
+                var token = _cts.Token;
 
-                if (IsHandleCreated)
-                    Invoke((Action)(() =>
-                    {
-                        statusLabel.Text = $"Connected to {instanceSelector.SelectedItem}";
-                        ReloadTablesAsync();
-                        instanceSelector.Enabled = true;
-                    }));
+                var conn = await Task.Run(() =>
+                {
+                    var c = new AdomdConnection(newConn);
+                    c.Open();
+                    return c;
+                }, token);
+
+                token.ThrowIfCancellationRequested();
+
+                Globals.ThisAddIn.ConnectionString = newConn;
+                Globals.ThisAddIn.Connection = conn;
+                Globals.ThisAddIn.ActiveCatalog = selected.catalog;
+
+                statusLabel.Text = $"Connected to {instanceSelector.SelectedItem}";
+                instanceSelector.Enabled = true;
+                ReloadTablesAsync();
+            }
+            catch (OperationCanceledException)
+            {
             }
             catch (Exception ex)
             {
-                if (IsHandleCreated)
-                    Invoke((Action)(() =>
-                    {
-                        statusLabel.Text = "Failed to connect: " + ex.Message;
-                        tablePanel.Controls.Clear();
-                        instanceSelector.Enabled = true;
-                    }));
+                if (!_cts.IsCancellationRequested)
+                {
+                    statusLabel.Text = "Failed to connect: " + ex.Message;
+                    ClearTablePanel();
+                    instanceSelector.Enabled = true;
+                }
+            }
+            finally
+            {
+                _loading = false;
             }
         }
 
         private async void ReloadTablesAsync()
         {
-            tablePanel.Controls.Clear();
+            ClearTablePanel();
+            allTableNames.Clear();
+            searchBox.Text = "";
+            searchBox.Visible = false;
             statusLabel.Text = "Loading tables...";
-            var tables = new List<string>();
+            List<string> tables;
 
             try
             {
-                tables = await Task.Run(() => Globals.ThisAddIn.GetAvailableTableNames());
+                var token = _cts.Token;
+                tables = await Task.Run(() => Globals.ThisAddIn.GetAvailableTableNames(), token);
+                token.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException)
+            {
+                return;
             }
             catch (Exception ex)
             {
-                statusLabel.Text = "Failed to get tables: " + ex.Message;
+                if (!_cts.IsCancellationRequested)
+                    statusLabel.Text = "Failed to get tables: " + ex.Message;
                 return;
             }
 
@@ -199,83 +323,29 @@ namespace PowerImport
                 return;
             }
 
-            foreach (var tableName in tables)
-            {
-                var btn = new Button
-                {
-                    Text = tableName,
-                    Width = 300,
-                    Height = 40,
-                    TextAlign = ContentAlignment.MiddleLeft,
-                    FlatStyle = FlatStyle.Standard,
-                    Tag = tableName
-                };
-
-                btn.Click += (s, e) =>
-                {
-                    var dlg = new TableDialog(tableName);
-                    if (dlg.ShowDialog() == DialogResult.OK)
-                    {
-                        Globals.ThisAddIn.ImportTable(tableName, dlg.UseNewSheet, dlg.TargetCellAddress);
-                    }
-                };
-
-                tablePanel.Controls.Add(btn);
-            }
-            statusLabel.Text = "";
+            allTableNames = tables;
+            statusLabel.Text = $"{tables.Count} tables";
+            searchBox.Visible = true;
+            BuildTableButtons(tables);
         }
 
-        private List<(int port, string catalog)> FindPowerBIPortFiles()
+        private void TableButton_Click(object sender, EventArgs e)
         {
-            var result = new List<(int, string)>();
-            string[] baseDirs = new[]
-            {
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "Microsoft", "Power BI Desktop", "AnalysisServicesWorkspaces"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "Packages", "Microsoft.MicrosoftPowerBIDesktop_8wekyb3d8bbwe", "LocalCache",
-                    "Microsoft", "Power BI Desktop", "AnalysisServicesWorkspaces")
-            };
+            var btn = (Button)sender;
+            var tableName = (string)btn.Tag;
 
-            foreach (var baseDir in baseDirs)
+            using (var dlg = new TableDialog(tableName))
             {
-                if (!Directory.Exists(baseDir)) continue;
-                foreach (var dir in Directory.GetDirectories(baseDir))
+                if (dlg.ShowDialog(this) == DialogResult.OK)
                 {
-                    var portPath = Path.Combine(dir, "Data", "msmdsrv.port.txt");
-                    if (!File.Exists(portPath)) continue;
-
-                    string raw = File.ReadAllText(portPath, System.Text.Encoding.Unicode);
-                    string portText = new string(raw.Where(char.IsDigit).ToArray());
-
-                    if (!int.TryParse(portText, out int port)) continue;
-
-                    try
+                    int rows = Globals.ThisAddIn.ImportTable(tableName, dlg.UseNewSheet, dlg.TargetCellAddress);
+                    if (rows >= 0)
                     {
-                        string connStr = $"Provider=MSOLAP;Data Source=localhost:{port};Integrated Security=SSPI;";
-                        using (var conn = new Microsoft.AnalysisServices.AdomdClient.AdomdConnection(connStr))
-                        {
-                            conn.Open();
-                            var catalogs = new List<string>();
-                            var cmd = conn.CreateCommand();
-                            cmd.CommandText = "SELECT * FROM $SYSTEM.DBSCHEMA_CATALOGS";
-                            using (var reader = cmd.ExecuteReader())
-                            {
-                                while (reader.Read())
-                                {
-                                    var name = reader["CATALOG_NAME"].ToString();
-                                    if (!string.IsNullOrWhiteSpace(name))
-                                        catalogs.Add(name);
-                                }
-                            }
-                            if (catalogs.Count > 0)
-                                result.Add((port, catalogs[0]));
-                        }
+                        Globals.ThisAddIn.Application.StatusBar =
+                            $"Imported '{tableName}' ({rows.ToString("N0")} rows)";
                     }
-                    catch { }
                 }
             }
-            return result;
         }
     }
 }
