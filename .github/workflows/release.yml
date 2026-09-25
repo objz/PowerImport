@@ -12,19 +12,12 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
-      - name: Set up MSBuild
-        uses: microsoft/setup-msbuild@v2
-        with:
-          msbuild-architecture: x64
-
-      - name: Restore NuGet packages
-        run: nuget restore PowerImport.sln
-
-      - name: Build add-in (Release)
-        run: msbuild PowerImport.sln /p:Configuration=Release /p:VisualStudioVersion=17.0
-
-      - name: Build installer (Release)
-        run: msbuild Installer/Installer.vdproj /p:Configuration=Release
+      - name: Build add-in and installer (Release)
+        # Use the classic MSBuild that ships with VS 2022 BuildTools (17.10.x), not the
+        # newer MSBuild 17.14 that setup-msbuild puts on PATH. 17.14 dropped support
+        # for packages.config restore, which breaks this legacy project. The classic
+        # MSBuild restores packages.config natively and builds the .vdproj in one pass.
+        run: '& "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\msbuild.exe" PowerImport.sln /t:Restore,Rebuild /p:Configuration=Release /p:VisualStudioVersion=17.0 /m /v:minimal'
 
       - name: Verify outputs
         shell: pwsh
