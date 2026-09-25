@@ -25,8 +25,13 @@ jobs:
       - name: Build add-in (Release)
         shell: pwsh
         run: |
-          & "$env:VS_PATH\MSBuild\Current\Bin\MSBuild.exe" PowerImport.csproj /t:Rebuild /p:Configuration=Release /p:VisualStudioVersion=17.0 /m /v:minimal
-          if ($LASTEXITCODE -ne 0) { throw "Add-in build failed with exit code $LASTEXITCODE" }
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=PowerImport" -CertStoreLocation Cert:\CurrentUser\My -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -NotBefore (Get-Date).AddMinutes(-5) -NotAfter (Get-Date).AddYears(5)
+          try {
+            & "$env:VS_PATH\MSBuild\Current\Bin\MSBuild.exe" PowerImport.csproj /t:Rebuild /p:Configuration=Release /p:VisualStudioVersion=17.0 /p:ManifestCertificateThumbprint=$($cert.Thumbprint) /m /v:minimal
+            if ($LASTEXITCODE -ne 0) { throw "Add-in build failed with exit code $LASTEXITCODE" }
+          } finally {
+            Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -Force
+          }
 
       - name: Build installer (Release)
         shell: pwsh
