@@ -22,16 +22,17 @@ jobs:
       - name: Restore NuGet packages
         run: nuget restore packages.config -PackagesDirectory packages -NonInteractive
 
-      - name: Build add-in (Release)
+      - name: Create signing certificate
         shell: pwsh
         run: |
           $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=PowerImport" -CertStoreLocation Cert:\CurrentUser\My -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -NotBefore (Get-Date).AddMinutes(-5) -NotAfter (Get-Date).AddYears(5)
-          try {
-            & "$env:VS_PATH\MSBuild\Current\Bin\MSBuild.exe" PowerImport.csproj /t:Rebuild /p:Configuration=Release /p:VisualStudioVersion=17.0 /p:ManifestCertificateThumbprint=$($cert.Thumbprint) /m /v:minimal
-            if ($LASTEXITCODE -ne 0) { throw "Add-in build failed with exit code $LASTEXITCODE" }
-          } finally {
-            Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -Force
-          }
+          "ManifestCertificateThumbprint=$($cert.Thumbprint)" >> $env:GITHUB_ENV
+
+      - name: Build add-in (Release)
+        shell: pwsh
+        run: |
+          & "$env:VS_PATH\MSBuild\Current\Bin\MSBuild.exe" PowerImport.csproj /t:Rebuild /p:Configuration=Release /p:VisualStudioVersion=17.0 /m /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw "Add-in build failed with exit code $LASTEXITCODE" }
 
       - name: Build installer (Release)
         timeout-minutes: 20
@@ -54,6 +55,11 @@ jobs:
             Pop-Location
             if ($undoExit -ne 0) { throw "Restoring out-of-process build failed with exit code $undoExit" }
           }
+
+      - name: Remove signing certificate
+        if: always()
+        shell: pwsh
+        run: Remove-Item "Cert:\CurrentUser\My\$env:ManifestCertificateThumbprint" -Force -ErrorAction SilentlyContinue
 
       - name: Verify outputs
         shell: pwsh

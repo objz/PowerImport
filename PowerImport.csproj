@@ -310,7 +310,7 @@
     </ManifestKeyFile>
   </PropertyGroup>
   <PropertyGroup>
-    <ManifestCertificateThumbprint>22EC588F180F568FFCAD62E3050FFEA68E9FAD46</ManifestCertificateThumbprint>
+    <ManifestCertificateThumbprint Condition="'$(ManifestCertificateThumbprint)' == ''">22EC588F180F568FFCAD62E3050FFEA68E9FAD46</ManifestCertificateThumbprint>
   </PropertyGroup>
   <PropertyGroup>
     <SignAssembly>true</SignAssembly>
