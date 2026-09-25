@@ -36,10 +36,23 @@ jobs:
       - name: Build installer (Release)
         shell: pwsh
         run: |
-          & "$env:VS_PATH\Common7\IDE\CommonExtensions\Microsoft\VSI\DisableOutOfProcBuild\DisableOutOfProcBuild.exe"
-          if ($LASTEXITCODE -ne 0) { throw "DisableOutOfProcBuild failed with exit code $LASTEXITCODE" }
-          & "$env:VS_PATH\Common7\IDE\devenv.com" Installer\Installer.vdproj /Rebuild Release
-          if ($LASTEXITCODE -ne 0) { throw "Installer build failed with exit code $LASTEXITCODE" }
+          $disableDir = "$env:VS_PATH\Common7\IDE\CommonExtensions\Microsoft\VSI\DisableOutOfProcBuild"
+          Push-Location $disableDir
+          & .\DisableOutOfProcBuild.exe
+          $disableExit = $LASTEXITCODE
+          Pop-Location
+          if ($disableExit -ne 0) { throw "DisableOutOfProcBuild failed with exit code $disableExit" }
+
+          try {
+            & "$env:VS_PATH\Common7\IDE\devenv.com" "$env:GITHUB_WORKSPACE\Installer\Installer.vdproj" /Rebuild Release
+            if ($LASTEXITCODE -ne 0) { throw "Installer build failed with exit code $LASTEXITCODE" }
+          } finally {
+            Push-Location $disableDir
+            & .\DisableOutOfProcBuild.exe undo
+            $undoExit = $LASTEXITCODE
+            Pop-Location
+            if ($undoExit -ne 0) { throw "Restoring out-of-process build failed with exit code $undoExit" }
+          }
 
       - name: Verify outputs
         shell: pwsh
