@@ -17,8 +17,11 @@ jobs:
         with:
           msbuild-architecture: x64
 
+      - name: Restore NuGet packages
+        run: nuget restore PowerImport.sln
+
       - name: Build add-in (Release)
-        run: msbuild PowerImport.sln /restore /p:Configuration=Release /p:VisualStudioVersion=17.0
+        run: msbuild PowerImport.sln /p:Configuration=Release /p:VisualStudioVersion=17.0
 
       - name: Build installer (Release)
         run: msbuild Installer/Installer.vdproj /p:Configuration=Release
