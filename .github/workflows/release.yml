@@ -34,6 +34,7 @@ jobs:
           }
 
       - name: Build installer (Release)
+        timeout-minutes: 20
         shell: pwsh
         run: |
           $disableDir = "$env:VS_PATH\Common7\IDE\CommonExtensions\Microsoft\VSI\DisableOutOfProcBuild"
