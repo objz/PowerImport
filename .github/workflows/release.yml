@@ -45,7 +45,7 @@ jobs:
           if ($disableExit -ne 0) { throw "DisableOutOfProcBuild failed with exit code $disableExit" }
 
           try {
-            & "$env:VS_PATH\Common7\IDE\devenv.com" "$env:GITHUB_WORKSPACE\Installer\Installer.vdproj" /Rebuild Release
+            & "$env:VS_PATH\Common7\IDE\devenv.com" "$env:GITHUB_WORKSPACE\PowerImport.sln" /Build "Release|Any CPU" /Project "$env:GITHUB_WORKSPACE\Installer\Installer.vdproj" /ProjectConfig Release
             if ($LASTEXITCODE -ne 0) { throw "Installer build failed with exit code $LASTEXITCODE" }
           } finally {
             Push-Location $disableDir
