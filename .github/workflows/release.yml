@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+
+      - name: Build add-in (Release)
+        run: msbuild PowerImport.sln /restore /p:Configuration=Release /p:VisualStudioVersion=17.0
+
+      - name: Build installer (Release)
+        run: msbuild Installer/Installer.vdproj /p:Configuration=Release
+
+      - name: Verify outputs
+        shell: pwsh
+        run: |
+          foreach ($f in @("bin/Release/PowerImport.dll", "bin/Release/PowerImport.vsto", "bin/Release/PowerImport.dll.manifest", "Installer/Release/PowerImport.msi")) {
+            if (-not (Test-Path $f)) { throw "Missing build output: $f" }
+          }
+          Write-Host "All build outputs present."
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: PowerImport 1.1.0
+          tag_name: 1.1.0
+          draft: false
+          generate_release_notes: true
+          files: |
+            Installer/Release/PowerImport.msi
